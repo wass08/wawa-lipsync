@@ -44,6 +44,7 @@ interface Band {
 export class Lipsync {
   public features: Feature | null = null;
   public viseme: VISEMES = VISEMES.sil;
+  public state: FSMStates = FSMStates.silence;
   private audioContext: AudioContext;
   private analyser: AnalyserNode;
   private dataArray: Uint8Array;
@@ -53,7 +54,6 @@ export class Lipsync {
   private binWidth: number;
   private bands: Band[];
   private audioSource?: HTMLMediaElement;
-  private state: FSMStates = FSMStates.silence;
   private visemeStartTime: number = 0; // Timestamp when current viseme started (ms)
   private maxVisemeDuration: number = 100; // Max duration in ms before penalty kicks in
   constructor(
