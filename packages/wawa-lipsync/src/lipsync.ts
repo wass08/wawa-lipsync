@@ -44,13 +44,16 @@ interface Band {
 export class Lipsync {
   public features: Feature | null = null;
   public viseme: VISEMES = VISEMES.sil;
-  private audioContext: AudioContext;
-  private analyser: AnalyserNode;
-  private dataArray: Uint8Array;
+  // Created lazily on first use so the class can be constructed during
+  // server-side rendering (e.g. Next.js), where `window` is not defined.
+  private audioContext?: AudioContext;
+  private analyser?: AnalyserNode;
+  private dataArray: Uint8Array = new Uint8Array(0);
+  private fftSize: number;
   private history: Feature[];
   private historySize: number;
-  private sampleRate: number;
-  private binWidth: number;
+  private sampleRate: number = 0;
+  private binWidth: number = 0;
   private bands: Band[];
   private audioSource?: HTMLMediaElement;
   private state: FSMStates = FSMStates.silence;
@@ -63,15 +66,9 @@ export class Lipsync {
     }
   ) {
     const { fftSize = 2048, historySize = 10 } = params;
-    this.audioContext = new (window.AudioContext ||
-      (window as any).webkitAudioContext)();
-    this.analyser = this.audioContext.createAnalyser();
-    this.analyser.fftSize = fftSize;
-    this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+    this.fftSize = fftSize;
     this.history = [];
     this.historySize = historySize;
-    this.sampleRate = this.audioContext.sampleRate;
-    this.binWidth = this.sampleRate / fftSize;
 
     // Define frequency bands (in Hz)
     this.bands = [
@@ -85,8 +82,30 @@ export class Lipsync {
     ];
   }
 
+  private ensureAudioContext(): {
+    audioContext: AudioContext;
+    analyser: AnalyserNode;
+  } {
+    if (!this.audioContext || !this.analyser) {
+      if (typeof window === "undefined") {
+        throw new Error(
+          "wawa-lipsync: Web Audio is only available in the browser"
+        );
+      }
+      this.audioContext = new (window.AudioContext ||
+        (window as any).webkitAudioContext)();
+      this.analyser = this.audioContext.createAnalyser();
+      this.analyser.fftSize = this.fftSize;
+      this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+      this.sampleRate = this.audioContext.sampleRate;
+      this.binWidth = this.sampleRate / this.fftSize;
+    }
+    return { audioContext: this.audioContext, analyser: this.analyser };
+  }
+
   connectAudio(audio: HTMLMediaElement) {
-    this.audioContext.resume();
+    const { audioContext, analyser } = this.ensureAudioContext();
+    audioContext.resume();
     this.history = [];
     this.features = null;
     this.state = FSMStates.silence;
@@ -100,18 +119,19 @@ export class Lipsync {
       console.warn("An audio source must be set before connecting");
       return;
     }
-    const source = this.audioContext.createMediaElementSource(audio);
-    source.connect(this.analyser);
-    this.analyser.connect(this.audioContext.destination);
+    const source = audioContext.createMediaElementSource(audio);
+    source.connect(analyser);
+    analyser.connect(audioContext.destination);
   }
 
   // Connect live microphone
   async connectMicrophone() {
+    const { audioContext, analyser } = this.ensureAudioContext();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const source = this.audioContext.createMediaStreamSource(stream);
-      source.connect(this.analyser);
-      this.analyser.connect(this.audioContext.destination);
+      const source = audioContext.createMediaStreamSource(stream);
+      source.connect(analyser);
+      analyser.connect(audioContext.destination);
       return source;
     } catch (err) {
       console.error("Error accessing microphone:", err);
@@ -120,7 +140,8 @@ export class Lipsync {
   }
 
   extractFeatures() {
-    this.analyser.getByteFrequencyData(this.dataArray);
+    const { analyser } = this.ensureAudioContext();
+    analyser.getByteFrequencyData(this.dataArray);
 
     // Convert frequency ranges to bin indices
     const bandEnergies = this.bands.map(({ start, end }) => {
